@@ -3,7 +3,7 @@ nusoap
 
 Nusoap PHP library
 
-<b>To implement soap server with simple of digest:</b>
+<b>To implement soap server with simple or digest:</b>
 
 
     if (soap_transport_http::authenticate("username", "password")) // checkes for both simple and digest
