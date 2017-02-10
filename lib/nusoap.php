@@ -2608,7 +2608,78 @@ class soap_transport_http extends nusoap_base {
 	function sendHTTPS($data, $timeout=0, $response_timeout=30, $cookies) {
 		return $this->send($data, $timeout, $response_timeout, $cookies);
 	}
-	
+
+    /**
+     * Authenticates soap request.
+     * @param $username username of authentication login
+     * @param $password password of authentication login
+     * @return bool
+     */
+    public static function authenticate($username, $password){
+
+        if (isset($_SERVER['PHP_AUTH_USER'])) {
+            $un = $_SERVER['PHP_AUTH_USER'];
+            $pass = $_SERVER['PHP_AUTH_PW'];
+            return $username == un && $password == $pass;
+
+        } else if (isset($_SERVER['PHP_AUTH_DIGEST'])) {
+
+            $digestRequest = $GLOBALS['DIGEST_REQUEST'];
+
+            return (soap_transport_http::generateHash($username, $password, $digestRequest, $_SERVER['REQUEST_METHOD'],
+                    $digestRequest['uri']) == $digestRequest['response']);
+        }else
+            return false;
+    }
+
+    /**
+     * Generates hash to send(at Soap client end) to soap server and to check hash with generated one from client((at Soap Server end)).
+     * @param $username
+     * @param $password
+     * @param $digestRequest
+     * @param $request_method
+     * @param $digest_uri
+     * @return string
+     */
+	private static function generateHash($username, $password, $digestRequest, $request_method, $digest_uri){
+        // calculate the Digest hashes (calculate code based on digest implementation found at: http://www.rassoc.com/gregr/weblog/stories/2002/07/09/webServicesSecurityHttpDigestAuthenticationWithoutActiveDirectory.html)
+
+        // A1 = unq(username-value) ":" unq(realm-value) ":" passwd
+        $A1 = $username. ':' . (isset($digestRequest['realm']) ? $digestRequest['realm'] : '') . ':' . $password;
+
+        // H(A1) = MD5(A1)
+        $HA1 = md5($A1);
+
+        // A2 = Method ":" digest-uri-value
+        $A2 = $request_method . ':' . $digest_uri;
+
+        // H(A2)
+        $HA2 =  md5($A2);
+
+        // KD(secret, data) = H(concat(secret, ":", data))
+        // if qop == auth:
+        // request-digest  = <"> < KD ( H(A1),     unq(nonce-value)
+        //                              ":" nc-value
+        //                              ":" unq(cnonce-value)
+        //                              ":" unq(qop-value)
+        //                              ":" H(A2)
+        //                            ) <">
+        // if qop is missing,
+        // request-digest  = <"> < KD ( H(A1), unq(nonce-value) ":" H(A2) ) > <">
+
+        $unhashedDigest = '';
+        $nonce = isset($digestRequest['nonce']) ? $digestRequest['nonce'] : '';
+        $cnonce = $nonce;
+        if ($digestRequest['qop'] != '') {
+            $unhashedDigest = $HA1 . ':' . $nonce . ':' . sprintf("%08d", $digestRequest['nc']) . ':' . $cnonce . ':' . $digestRequest['qop'] . ':' . $HA2;
+        } else {
+            $unhashedDigest = $HA1 . ':' . $nonce . ':' . $HA2;
+        }
+
+        $hashedDigest = md5($unhashedDigest);
+        return $hashedDigest;
+    }
+
 	/**
 	* if authenticating, set user credentials here
 	*
@@ -2630,49 +2701,17 @@ class soap_transport_http extends nusoap_base {
 		} elseif ($authtype == 'digest') {
 			if (isset($digestRequest['nonce'])) {
 				$digestRequest['nc'] = isset($digestRequest['nc']) ? $digestRequest['nc']++ : 1;
-				
-				// calculate the Digest hashes (calculate code based on digest implementation found at: http://www.rassoc.com/gregr/weblog/stories/2002/07/09/webServicesSecurityHttpDigestAuthenticationWithoutActiveDirectory.html)
-	
-				// A1 = unq(username-value) ":" unq(realm-value) ":" passwd
-				$A1 = $username. ':' . (isset($digestRequest['realm']) ? $digestRequest['realm'] : '') . ':' . $password;
-	
-				// H(A1) = MD5(A1)
-				$HA1 = md5($A1);
-	
-				// A2 = Method ":" digest-uri-value
-				$A2 = $this->request_method . ':' . $this->digest_uri;
-	
-				// H(A2)
-				$HA2 =  md5($A2);
-	
-				// KD(secret, data) = H(concat(secret, ":", data))
-				// if qop == auth:
-				// request-digest  = <"> < KD ( H(A1),     unq(nonce-value)
-				//                              ":" nc-value
-				//                              ":" unq(cnonce-value)
-				//                              ":" unq(qop-value)
-				//                              ":" H(A2)
-				//                            ) <">
-				// if qop is missing,
-				// request-digest  = <"> < KD ( H(A1), unq(nonce-value) ":" H(A2) ) > <">
-	
-				$unhashedDigest = '';
-				$nonce = isset($digestRequest['nonce']) ? $digestRequest['nonce'] : '';
-				$cnonce = $nonce;
-				if ($digestRequest['qop'] != '') {
-					$unhashedDigest = $HA1 . ':' . $nonce . ':' . sprintf("%08d", $digestRequest['nc']) . ':' . $cnonce . ':' . $digestRequest['qop'] . ':' . $HA2;
-				} else {
-					$unhashedDigest = $HA1 . ':' . $nonce . ':' . $HA2;
-				}
-	
-				$hashedDigest = md5($unhashedDigest);
-	
-				$opaque = '';	
-				if (isset($digestRequest['opaque'])) {
-					$opaque = ', opaque="' . $digestRequest['opaque'] . '"';
-				}
 
-				$this->setHeader('Authorization', 'Digest username="' . $username . '", realm="' . $digestRequest['realm'] . '", nonce="' . $nonce . '", uri="' . $this->digest_uri . $opaque . '", cnonce="' . $cnonce . '", nc=' . sprintf("%08x", $digestRequest['nc']) . ', qop="' . $digestRequest['qop'] . '", response="' . $hashedDigest . '"');
+                $nonce = isset($digestRequest['nonce']) ? $digestRequest['nonce'] : '';
+                $cnonce = $nonce;
+
+                $hashedDigest = soap_transport_http::generateHash($username, $password, $digestRequest, $this->request_method, $this->digest_uri);
+
+                $opaque = '';
+				if (isset($digestRequest['opaque'])) {
+					$opaque = ', opaque="' . $digestRequest['opaque'] . '';
+				}
+				$this->setHeader('Authorization', 'Digest username="' . $username . '", realm="' . $digestRequest['realm'] . '", nonce="' . $nonce . '", uri="' . $this->digest_uri . '"' . $opaque . '", cnonce="' . $cnonce . '", nc=' . sprintf("%08x", $digestRequest['nc']) . ', qop="' . $digestRequest['qop'] . '", response="' . $hashedDigest . '"');
 			}
 		} elseif ($authtype == 'certificate') {
 			$this->certRequest = $certRequest;
@@ -3211,9 +3250,9 @@ class soap_transport_http extends nusoap_base {
 			$this->tryagain = true;
 			return false;
 		}
-
  		// see if we need to resend the request with http digest authentication
  		if (isset($this->incoming_headers['www-authenticate']) && $http_status == 401) {
+
  			$this->debug("Got 401 $http_reason with WWW-Authenticate: " . $this->incoming_headers['www-authenticate']);
  			if (strstr($this->incoming_headers['www-authenticate'], "Digest ")) {
  				$this->debug('Server wants digest authentication');
@@ -4083,6 +4122,9 @@ class nusoap_server extends nusoap_base {
 				$instance = new $class ();
 				$call_arg = array(&$instance, $method);
 			}
+
+            $this->parse_authentication_req();
+
 			if (is_array($this->methodparams)) {
 				$this->methodreturn = call_user_func_array($call_arg, array_values($this->methodparams));
 			} else {
@@ -4093,6 +4135,33 @@ class nusoap_server extends nusoap_base {
         $this->appendDebug($this->varDump($this->methodreturn));
 		$this->debug("in invoke_method, called method $this->methodname, received data of type ".gettype($this->methodreturn));
 	}
+
+    function parse_authentication_req(){
+        // Detect type of Authorization and set variables
+        if (isset($_SERVER['PHP_AUTH_USER'])) {
+            // most other servers
+        } else if (isset($_SERVER['PHP_AUTH_DIGEST'])) {
+
+            $temp = explode(',', $_SERVER['PHP_AUTH_DIGEST']);
+            $digestRequest = array();
+            foreach ($temp as $value) {
+                $kv = explode("=", $value);
+                $digestRequest[trim($kv[0])] = strtr($kv[1], array('"' => ''));
+            }
+
+            $GLOBALS['DIGEST_REQUEST'] = $digestRequest;
+        } elseif (isset($_SERVER['HTTP_AUTHORIZATION'])) {
+
+            $temp = explode(',', $_SERVER['PHP_AUTH_DIGEST']);
+            $digestRequest = array();
+            foreach ($temp as $value) {
+                $kv = explode("=", $value);
+                $digestRequest[trim($kv[0])] = strtr($kv[1], array('"' => ''));
+            }
+
+            $GLOBALS['DIGEST_REQUEST'] = $digestRequest;
+        }
+    }
 
 	/**
 	* serializes the return value from a PHP function into a full SOAP Envelope
@@ -7618,8 +7687,15 @@ class nusoap_client extends nusoap_base  {
 				if($this->proxyhost && $this->proxyport){
 					$http->setProxy($this->proxyhost,$this->proxyport,$this->proxyusername,$this->proxypassword);
 				}
-                if($this->authtype != '') {
-					$http->setCredentials($this->username, $this->password, $this->authtype, array(), $this->certRequest);
+
+                if($this->authtype != '')
+				{
+					$http->setCredentials($this->username, $this->password, $this->authtype, array(
+					"realm" => "realm",
+					"nonce" => "4993927ba6279",
+					"qop" => "auth",
+					"opaque" => "1",
+				), $this->certRequest);
 				}
 				if($this->http_encoding != ''){
 					$http->setEncoding($this->http_encoding);
