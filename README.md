@@ -5,7 +5,6 @@ Nusoap PHP library
 
 <b>To implement soap server with simple or digest auth:</b>
 
-
     if (soap_transport_http::authenticate("username", "password")) // checkes for both simple and digest
     {
         $result = array('QueryStatus' => '200', 'QueryMsg' => 'Logged in successfully');
